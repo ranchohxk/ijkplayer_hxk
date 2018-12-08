@@ -56,14 +56,17 @@ static int ijkio_open(URLContext *h, const char *arg, int flags, AVDictionary **
 
     IjkIOManagerContext *manager_ctx = (IjkIOManagerContext *)(c->io_manager_ctx);
     manager_ctx->ijkio_interrupt_callback = (IjkAVIOInterruptCB *)&(h->interrupt_callback);
-
+    //arg:ijkio:cache:ffio:http://videocdn.eebbk.net/935a1ee673926daa0ad1d0248d571168.mp4
     av_strstart(arg, "ijkio:", &arg);
+    //arg:cache:ffio:http://videocdn.eebbk.net/935a1ee673926daa0ad1d0248d571168.mp4
     IjkAVDictionary *opts = NULL;
+    //把options拷贝到opts里面
     ijkio_copy_options(&opts, *options);
-
+	
     manager_ctx->cur_ffmpeg_ctx = c;
 
     ret = ijkio_manager_io_open(manager_ctx, arg, flags, &opts);
+    //释放opts
     ijk_av_dict_free(&opts);
 
     if (ret != 0) {
