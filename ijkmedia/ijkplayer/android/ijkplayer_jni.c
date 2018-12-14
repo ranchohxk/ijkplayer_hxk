@@ -868,7 +868,7 @@ static bool mediacodec_select_callback(void *opaque, ijkmp_mediacodecinfo_contex
         ALOGE("%s: SetupThreadEnv failed\n", __func__);
         return -1;
     }
-
+	//调java层ijkMediaPlayer的onSelectCodec来获取codec name
     found_codec_name = J4AC_IjkMediaPlayer__onSelectCodec__withCString__asCBuffer(env, weak_this, mcc->mime_type, mcc->profile, mcc->level, mcc->codec_name, sizeof(mcc->codec_name));
     if (J4A_ExceptionCheck__catchAll(env) || !found_codec_name) {
         ALOGE("%s: onSelectCodec failed\n", __func__);

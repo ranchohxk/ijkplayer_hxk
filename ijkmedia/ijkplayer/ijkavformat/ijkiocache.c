@@ -548,8 +548,10 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
     c->async_open = 0;
     c->ijkio_interrupt_callback = h->ijkio_app_ctx->ijkio_interrupt_callback;
     c->cache_file_forwards_capacity = 0;
-
+    //url:cache:ffio:http://videocdn.eebbk.net/935a1ee673926daa0ad1d0248d571168.mp4
     ijk_av_strstart(url, "cache:", &url);
+    //url:ffio:http://videocdn.eebbk.net/935a1ee673926daa0ad1d0248d571168.mp4
+    //设置最大初始值512mb
     c->cache_max_capacity = DEFAULT_CACHE_MAX_CAPACITY;
 
     IjkAVDictionaryEntry *t = NULL;
@@ -581,10 +583,11 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
             c->cache_file_forwards_capacity = 0;
         }
     }
-
+    //赋值缓存文件地址
     c->cache_file_path = c->ijkio_app_ctx->cache_file_path;
 
     if (c->cache_file_path == NULL || 0 == strlen(c->cache_file_path)) {
+		av_log(NULL, AV_LOG_ERROR, "ijkiocache-cache_file_path is null!\n");
         c->cache_file_close = 1;
     }
 
@@ -601,19 +604,25 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
             if (c->ijkio_app_ctx->fd >= 0) {
                 c->fd = c->ijkio_app_ctx->fd;
             } else {
+            //如果已经缓存过的话
                 if (ijk_map_size(c->cache_info_map) > 0) {
                     av_log(NULL, AV_LOG_INFO, "ijkio cache will use the data that already exists\n");
                     c->fd = open(c->cache_file_path, O_RDWR | O_BINARY, 0600);
                     c->async_open = 1;
+                    //读取一下已经缓存到本地的缓存文件大小
                     cur_exist_file_size = lseek(c->fd, 0, SEEK_END);
+                    //如果当前已经存在的文件大小不等于解析获取到的最后的物理位置
+                    //也就是文件出错了
                     if (cur_exist_file_size < *c->last_physical_pos) {
                         av_log(NULL, AV_LOG_WARNING, "ijkio cache exist is error, will delete last_physical_pos = %lld, cur_exist_file_size = %lld\n", *c->last_physical_pos, cur_exist_file_size);
                         ijk_map_traversal_handle(c->cache_info_map, NULL, tree_destroy);
+                        //清理map数据，重新制定缓存初始值
                         ijk_map_clear(c->cache_info_map);
                         *c->last_physical_pos    = 0;
                         c->cache_physical_pos    = 0;
                     }
                 } else {
+                //如果没有缓存，直接打开文件获取fd
                     c->fd = open(c->cache_file_path, O_RDWR | O_BINARY | O_CREAT | O_TRUNC, 0600);
                 }
                 c->ijkio_app_ctx->fd = c->fd;
@@ -622,8 +631,9 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
                 c->cache_file_close = 1;
                 break;
             }
-
+            //seek到已经缓存结束的位置
             int64_t seek_ret = lseek(c->fd, *c->last_physical_pos, SEEK_SET);
+            //seek失败，关闭fd，跳出循环
             if (seek_ret < 0) {
                 c->cache_file_close = 1;
                 close(c->fd);
@@ -631,16 +641,20 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
                 c->ijkio_app_ctx->fd = -1;
                 break;
             } else {
+            //把解析到的最后的物理地址赋值给缓存物理地址
                 c->cache_physical_pos = *c->last_physical_pos;
             }
 
             c->tree_info = ijk_map_get(c->cache_info_map, (int64_t)c->cur_file_no);
+            //如果没有获取到tree_info
             if (c->tree_info == NULL) {
                 c->tree_info = calloc(1, sizeof(IjkCacheTreeInfo));
+                //把最新一次的物理地址赋值给physical_init_pos
                 c->tree_info->physical_init_pos = *c->last_physical_pos;
                 ijk_map_put(c->cache_info_map, (int64_t)c->cur_file_no, c->tree_info);
             } else {
                 if (c->tree_info->physical_size > 200 * 1024 && c->tree_info->file_size > 0) {
+                //把文件大小赋值给逻辑地址
                     c->logical_size = c->tree_info->file_size;
                     c->async_open = 1;
                 } else {
@@ -666,7 +680,7 @@ static int ijkio_cache_open(IjkURLContext *h, const char *url, int flags, IjkAVD
             call_inject_statistic(h);
         }
     }
-
+//互斥量和条件量的初始化
     ret = pthread_mutex_init(&c->file_mutex, NULL);
     if (ret != 0) {
         av_log(NULL, AV_LOG_ERROR, "pthread_mutex_init failed : %s\n", av_err2str(ret));
@@ -730,6 +744,7 @@ url_fail:
     }
     return ret;
 }
+
 
 static int ijkio_file_read(IjkURLContext *h, void *dest, int to_read)
 {

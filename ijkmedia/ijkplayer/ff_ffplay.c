@@ -363,7 +363,8 @@ static int packet_queue_get_or_buffering(FFPlayer *ffp, PacketQueue *q, AVPacket
 }
 
 static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond *empty_queue_cond) {
-    memset(d, 0, sizeof(Decoder));
+	//初始化变量值
+	memset(d, 0, sizeof(Decoder));
     d->avctx = avctx;
     d->queue = queue;
     d->empty_queue_cond = empty_queue_cond;
@@ -372,7 +373,7 @@ static void decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, 
     d->first_frame_decoded_time = SDL_GetTickHR();
     d->first_frame_decoded = 0;
 
-    SDL_ProfilerReset(&d->decode_profiler, -1);
+    SDL_ProfilerReset(&d->decode_profiler, -1);//profile 置-1
 }
 
 static int convert_image(FFPlayer *ffp, AVFrame *src_frame, int64_t src_frame_pts, int width, int height) {
@@ -1073,10 +1074,13 @@ static double get_clock(Clock *c)
 {
     if (*c->queue_serial != c->serial)
         return NAN;
+	 //当前是暂停状态，直接返回pts，暂时状态，时间没走
     if (c->paused) {
         return c->pts;
     } else {
+    	//av_gettime_relative获取到的是开机到现在的时间
         double time = av_gettime_relative() / 1000000.0;
+		//如果当前正处在播放状态，则返回的时间为最新的pts + 更新pts之后流逝的时间
         return c->pts_drift + time - (time - c->last_updated) * (1.0 - c->speed);
     }
 }
@@ -1085,7 +1089,7 @@ static void set_clock_at(Clock *c, double pts, int serial, double time)
 {
     c->pts = pts;
     c->last_updated = time;
-    c->pts_drift = c->pts - time;
+    c->pts_drift = c->pts - time;//时间戳减去真实时间（开机到现在的时间）
     c->serial = serial;
 }
 
@@ -1998,11 +2002,13 @@ static int audio_thread(void *arg)
 
     do {
         ffp_audio_statistic_l(ffp);
+		//解码音频帧
         if ((got_frame = decoder_decode_frame(ffp, &is->auddec, frame, NULL)) < 0)
             goto the_end;
-
+		//如果解码成功
         if (got_frame) {
                 tb = (AVRational){1, frame->sample_rate};
+				 //精准seek这块先不看
                 if (ffp->enable_accurate_seek && is->audio_accurate_seek_req && !is->seek_req) {
                     frame_pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
                     now = av_gettime_relative() / 1000;
@@ -2133,15 +2139,18 @@ static int audio_thread(void *arg)
             while ((ret = av_buffersink_get_frame_flags(is->out_audio_filter, frame, 0)) >= 0) {
                 tb = av_buffersink_get_time_base(is->out_audio_filter);
 #endif
+				//精准seek结束
+				// 检查是否帧队列是否可写入，如果不可写入，则直接释放
                 if (!(af = frame_queue_peek_writable(&is->sampq)))
                     goto the_end;
-
+				 // 设定帧的pts
                 af->pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
                 af->pos = frame->pkt_pos;
                 af->serial = is->auddec.pkt_serial;
                 af->duration = av_q2d((AVRational){frame->nb_samples, frame->sample_rate});
 
                 av_frame_move_ref(af->frame, frame);
+				// 将解码后的音频帧压入解码后的音频队列
                 frame_queue_push(&is->sampq);
 
 #if CONFIG_AVFILTER
@@ -2157,6 +2166,7 @@ static int audio_thread(void *arg)
 #if CONFIG_AVFILTER
     avfilter_graph_free(&is->agraph);
 #endif
+	// 释放
     av_frame_free(&frame);
     return ret;
 }
@@ -2469,7 +2479,10 @@ static int audio_decode_frame(FFPlayer *ffp)
 
     if (is->paused || is->step)
         return -1;
-
+	//sync_av_start音频视频同步启动，默认1
+	//有视频流
+	//视频第一帧解码成功
+	//视频解码的的最后不等于视频队列的序列号，说明视频还没结束
     if (ffp->sync_av_start &&                       /* sync enabled */
         is->video_st &&                             /* has video stream */
         !is->viddec.first_frame_decoded &&          /* not hot */
@@ -2480,7 +2493,7 @@ static int audio_decode_frame(FFPlayer *ffp)
             now > is->viddec.first_frame_decoded_time + 2000) {
             is->viddec.first_frame_decoded = 1;
         } else {
-            /* video pipeline is not ready yet */
+            /*视频没有准备好video pipeline is not ready yet */
             return -1;
         }
     }
@@ -2493,43 +2506,51 @@ reload:
             av_usleep (1000);
         }
 #endif
+		 // 判断已解码的缓存队列是否可读
         if (!(af = frame_queue_peek_readable(&is->sampq)))
             return -1;
+		 // 缓存队列的下一帧
         frame_queue_next(&is->sampq);
     } while (af->serial != is->audioq.serial);
-
+	 // 获取数据的大小
     data_size = av_samples_get_buffer_size(NULL, af->frame->channels,
                                            af->frame->nb_samples,
                                            af->frame->format, 1);
-
+	// 解码的声道设计
     dec_channel_layout =
         (af->frame->channel_layout && af->frame->channels == av_get_channel_layout_nb_channels(af->frame->channel_layout)) ?
         af->frame->channel_layout : av_get_default_channel_layout(af->frame->channels);
-    wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
-
+	// 同步音频并获取采样的大小（这里处理不是音频做为时间基准的同步）
+	wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
+	// 如果跟源音频的格式、声道格式、采样率、采样大小等不相同，则需要做重采样处理,可以加log发现ffmpeg解码出来的音频格式是fltp的，但是is->audio_src.fmt是s16的
     if (af->frame->format        != is->audio_src.fmt            ||
         dec_channel_layout       != is->audio_src.channel_layout ||
         af->frame->sample_rate   != is->audio_src.freq           ||
         (wanted_nb_samples       != af->frame->nb_samples && !is->swr_ctx)) {
         AVDictionary *swr_opts = NULL;
+		// 释放旧的重采样上下文
         swr_free(&is->swr_ctx);
+		// 重新创建重采样上下文
+        //前三个参数是重采样后的音频参数，后三个是重采样前的音频参数
         is->swr_ctx = swr_alloc_set_opts(NULL,
                                          is->audio_tgt.channel_layout, is->audio_tgt.fmt, is->audio_tgt.freq,
                                          dec_channel_layout,           af->frame->format, af->frame->sample_rate,
                                          0, NULL);
-        if (!is->swr_ctx) {
+		// 判断是否创建成功
+		if (!is->swr_ctx) {
             av_log(NULL, AV_LOG_ERROR,
                    "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
                     af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->channels,
                     is->audio_tgt.freq, av_get_sample_fmt_name(is->audio_tgt.fmt), is->audio_tgt.channels);
             return -1;
         }
+		//写options到sws_ctx中
         av_dict_copy(&swr_opts, ffp->swr_opts, 0);
         if (af->frame->channel_layout == AV_CH_LAYOUT_5POINT1_BACK)
             av_opt_set_double(is->swr_ctx, "center_mix_level", ffp->preset_5_1_center_mix_level, 0);
         av_opt_set_dict(is->swr_ctx, &swr_opts);
         av_dict_free(&swr_opts);
-
+		//inti失败  释放swr_ctx
         if (swr_init(is->swr_ctx) < 0) {
             av_log(NULL, AV_LOG_ERROR,
                    "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
@@ -2538,15 +2559,16 @@ reload:
             swr_free(&is->swr_ctx);
             return -1;
         }
+		// 重新设置音频的声道数、声道格式、采样频率、采样格式等
         is->audio_src.channel_layout = dec_channel_layout;
         is->audio_src.channels       = af->frame->channels;
         is->audio_src.freq = af->frame->sample_rate;
         is->audio_src.fmt = af->frame->format;
     }
-
+	// 如果重采样上下文存在，则进行重采样，否则直接复制当前的数据
     if (is->swr_ctx) {
         const uint8_t **in = (const uint8_t **)af->frame->extended_data;
-        uint8_t **out = &is->audio_buf1;
+        uint8_t **out = &is->audio_buf1;//audio_buf1的指针指向out
         int out_count = (int)((int64_t)wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate + 256);
         int out_size  = av_samples_get_buffer_size(NULL, is->audio_tgt.channels, out_count, is->audio_tgt.fmt, 0);
         int len2;
@@ -2554,6 +2576,7 @@ reload:
             av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size() failed\n");
             return -1;
         }
+		// 如果想要的采样大小跟帧的采样大小，需要做补偿处理
         if (wanted_nb_samples != af->frame->nb_samples) {
             if (swr_set_compensation(is->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * is->audio_tgt.freq / af->frame->sample_rate,
                                         wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate) < 0) {
@@ -2565,6 +2588,7 @@ reload:
 
         if (!is->audio_buf1)
             return AVERROR(ENOMEM);
+		// 音频重采样，out是重采样后的音频数据，in是采样前的音频数据
         len2 = swr_convert(is->swr_ctx, out, out_count, in, af->frame->nb_samples);
         if (len2 < 0) {
             av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
@@ -2575,13 +2599,18 @@ reload:
             if (swr_init(is->swr_ctx) < 0)
                 swr_free(&is->swr_ctx);
         }
+		// 设置音频缓冲
         is->audio_buf = is->audio_buf1;
+		// 计算重采样后的大小
         int bytes_per_sample = av_get_bytes_per_sample(is->audio_tgt.fmt);
         resampled_data_size = len2 * is->audio_tgt.channels * bytes_per_sample;
 #if defined(__ANDROID__)
+		//这里主要是处理变速变调
+		//如果开启soundtouch变速变调
         if (ffp->soundtouch_enable && ffp->pf_playback_rate != 1.0f && !is->abort_request) {
             av_fast_malloc(&is->audio_new_buf, &is->audio_new_buf_size, out_size * translate_time);
-            for (int i = 0; i < (resampled_data_size / 2); i++)
+			 //8->16  转成short
+			for (int i = 0; i < (resampled_data_size / 2); i++)
             {
                 is->audio_new_buf[i] = (is->audio_buf1[i * 2] | (is->audio_buf1[i * 2 + 1] << 8));
             }
@@ -2597,13 +2626,12 @@ reload:
             }
         }
 #endif
-    } else {
+    } else {//如果不是android的
         is->audio_buf = af->frame->data[0];
         resampled_data_size = data_size;
     }
-
     audio_clock0 = is->audio_clock;
-    /* update the audio clock with the pts */
+    /* 更新音频ptsupdate the audio clock with the pts */
     if (!isnan(af->pts))
         is->audio_clock = af->pts + (double) af->frame->nb_samples / af->frame->sample_rate;
     else
@@ -2622,6 +2650,7 @@ reload:
         ALOGD("avcodec/Audio: first frame decoded\n");
         ffp_notify_msg1(ffp, FFP_MSG_AUDIO_DECODED_START);
         is->auddec.first_frame_decoded_time = SDL_GetTickHR();
+		 //把第一帧解码的变量设置为1
         is->auddec.first_frame_decoded = 1;
     }
     return resampled_data_size;
@@ -2639,36 +2668,49 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
     }
 
     ffp->audio_callback_time = av_gettime_relative();
-
+	//播放速度调整
     if (ffp->pf_playback_rate_changed) {
         ffp->pf_playback_rate_changed = 0;
 #if defined(__ANDROID__)
-        if (!ffp->soundtouch_enable) {
+		//如果没有开启soundtouch和sonic变速
+        if (!ffp->soundtouch_enable) {  
+			//当选audiotrack时，直接用audiotrack的变速播放接口来变速
             SDL_AoutSetPlaybackRate(ffp->aout, ffp->pf_playback_rate);
         }
 #else
+		//如果不是android，是ios
         SDL_AoutSetPlaybackRate(ffp->aout, ffp->pf_playback_rate);
 #endif
     }
+	 //音量调整
     if (ffp->pf_playback_volume_changed) {
         ffp->pf_playback_volume_changed = 0;
         SDL_AoutSetPlaybackVolume(ffp->aout, ffp->pf_playback_volume);
     }
-
+	//如果len大于0
     while (len > 0) {
+		 //缓冲区中无数据
+    //audio_buf_index 就是还没读取的音频数据的索引值（起点值）
+    //audio_size就是取出来的音频数据的长度，例如一次取出来2048个，但是len是256的话，就需要分批循环来取数据了，while循环只会执行一次，但是callback回调函数会被多次回调
+     /*  audio_buf_index 和 audio_buf_size标示我们自己用来放置解码出来的数据的缓冲区这些数据待copy到SDL缓冲区， 当audio_buf_index >= audio_buf_size的时候意味着我们的缓冲为空，没有数据可供copy，这时候需要调用audio_decode_frame来解码出更多的帧数据*/
         if (is->audio_buf_index >= is->audio_buf_size) {
+			//取的音频解码帧，这里主要从解码后的音频缓存队列中读取一帧，并做重采样处理(转码、变声、变速等操作)，并没有做解码操作等
            audio_size = audio_decode_frame(ffp);
+			/* audio_data_size小于0标示没能解码出数据，我们默认播放静音*/
            if (audio_size < 0) {
-                /* if error, just output silence */
-               is->audio_buf = NULL;
+                /* 输出静音if error, just output silence */
+               is->audio_buf = NULL;//buf置空,静音
                is->audio_buf_size = SDL_AUDIO_MIN_BUFFER_SIZE / is->audio_tgt.frame_size * is->audio_tgt.frame_size;
            } else {
+		   	  // 显示音频波形
                if (is->show_mode != SHOW_MODE_VIDEO)
                    update_sample_display(is, (int16_t *)is->audio_buf, audio_size);
+			   //把获取的音频大小赋值给is->audio_buf_size
                is->audio_buf_size = audio_size;
            }
            is->audio_buf_index = 0;
         }
+		//seek的时候序列号会不相同，刷新音频数据
         if (is->auddec.pkt_serial != is->audioq.serial) {
             is->audio_buf_index = is->audio_buf_size;
             memset(stream, 0, len);
@@ -2677,20 +2719,25 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
             SDL_AoutFlushAudio(ffp->aout);
             break;
         }
+		/*  查看stream可用空间，决定一次copy多少数据，剩下的下次继续copy */
+        //如 audio_buf_size是2048，第一次读的时候is->audio_buf_index是0，所以len1的长度是2048
         len1 = is->audio_buf_size - is->audio_buf_index;
         if (len1 > len)
             len1 = len;
+		// muted,静音标志，如果不处于静音模式并且声音最大
         if (!is->muted && is->audio_buf && is->audio_volume == SDL_MIX_MAXVOLUME)
-            memcpy(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1);
+            memcpy(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1); //从audio_buf的audio_buf_index起点取数据赋值len1长度256个字节到stream
         else {
             memset(stream, 0, len1);
+			// 非静音、并且音量不是最大，则需要混音（这里其实没处理。mix函数为null）
             if (!is->muted && is->audio_buf)
                 SDL_MixAudio(stream, (uint8_t *)is->audio_buf + is->audio_buf_index, len1, is->audio_volume);
         }
-        len -= len1;
-        stream += len1;
-        is->audio_buf_index += len1;
+        len -= len1;//由于len1和len都是256，所以len是0，不会执行下一次while循环了
+        stream += len1;//stream到结尾了
+        is->audio_buf_index += len1;//调整audio_buf_index索引到还没读取数据的位置，因为2048还没读完，才读了256个字节，当然这里的具体数字只是举个栗子
     }
+	//还未读取的音频数据，如2048-256
     is->audio_write_buf_size = is->audio_buf_size - is->audio_buf_index;
     /* Let's assume the audio driver that is used by SDL has two periods. */
     if (!isnan(is->audio_clock)) {
@@ -2724,6 +2771,7 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
 {
     FFPlayer *ffp = opaque;
     VideoState *is = ffp->is;
+	/* wanted_spec是我们期望设置的属性，spec是系统最终接受的参数 */
     SDL_AudioSpec wanted_spec, spec;
     const char *env;
     static const int next_nb_channels[] = {0, 0, 1, 6, 2, 6, 4, 6};
@@ -2734,29 +2782,33 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
     int next_sample_rate_idx = FF_ARRAY_ELEMS(next_sample_rates) - 1;
 
     env = SDL_getenv("SDL_AUDIO_CHANNELS");
-    if (env) {
+    if (env) {//env是null，这里不执行
         wanted_nb_channels = atoi(env);
         wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
     }
+	//根据通道布局类型获取通道
     if (!wanted_channel_layout || wanted_nb_channels != av_get_channel_layout_nb_channels(wanted_channel_layout)) {
         wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
         wanted_channel_layout &= ~AV_CH_LAYOUT_STEREO_DOWNMIX;
     }
     wanted_nb_channels = av_get_channel_layout_nb_channels(wanted_channel_layout);
-    wanted_spec.channels = wanted_nb_channels;
-    wanted_spec.freq = wanted_sample_rate;
+    wanted_spec.channels = wanted_nb_channels;//赋值通道
+    wanted_spec.freq = wanted_sample_rate;//采样率
     if (wanted_spec.freq <= 0 || wanted_spec.channels <= 0) {
         av_log(NULL, AV_LOG_ERROR, "Invalid sample rate or channel count!\n");
         return -1;
     }
     while (next_sample_rate_idx && next_sample_rates[next_sample_rate_idx] >= wanted_spec.freq)
         next_sample_rate_idx--;
-    wanted_spec.format = AUDIO_S16SYS;
-    wanted_spec.silence = 0;
+    wanted_spec.format = AUDIO_S16SYS;//音频格式
+    wanted_spec.silence = 0;//0表示静音
     wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AoutGetAudioPerSecondCallBacks(ffp->aout)));
-    wanted_spec.callback = sdl_audio_callback;
+	//初始化回调函数，这个很重要。向SDL缓冲区填充数据，下面会更细致的分析
+	wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = opaque;
+	 //创建音频播放线程
     while (SDL_AoutOpenAudio(ffp->aout, &wanted_spec, &spec) < 0) {
+		//如果创建失败
         /* avoid infinity loop on exit. --by bbcallen */
         if (is->abort_request)
             return -1;
@@ -2774,7 +2826,7 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
         }
         wanted_channel_layout = av_get_default_channel_layout(wanted_spec.channels);
     }
-    if (spec.format != AUDIO_S16SYS) {
+    if (spec.format != AUDIO_S16SYS) {//如果格式不是AUDIO_S16SYS，直接返回错误
         av_log(NULL, AV_LOG_ERROR,
                "SDL advised audio format %d is not supported!\n", spec.format);
         return -1;
@@ -2787,13 +2839,13 @@ static int audio_open(FFPlayer *opaque, int64_t wanted_channel_layout, int wante
             return -1;
         }
     }
-
-    audio_hw_params->fmt = AV_SAMPLE_FMT_S16;
-    audio_hw_params->freq = spec.freq;
-    audio_hw_params->channel_layout = wanted_channel_layout;
-    audio_hw_params->channels =  spec.channels;
-    audio_hw_params->frame_size = av_samples_get_buffer_size(NULL, audio_hw_params->channels, 1, audio_hw_params->fmt, 1);
-    audio_hw_params->bytes_per_sec = av_samples_get_buffer_size(NULL, audio_hw_params->channels, audio_hw_params->freq, audio_hw_params->fmt, 1);
+	// 设置音频硬件参数
+    audio_hw_params->fmt = AV_SAMPLE_FMT_S16;//采样格式
+    audio_hw_params->freq = spec.freq;//采样率
+    audio_hw_params->channel_layout = wanted_channel_layout;//声道设计
+    audio_hw_params->channels =  spec.channels;//声道数
+    audio_hw_params->frame_size = av_samples_get_buffer_size(NULL, audio_hw_params->channels, 1, audio_hw_params->fmt, 1); //采样大小
+    audio_hw_params->bytes_per_sec = av_samples_get_buffer_size(NULL, audio_hw_params->channels, audio_hw_params->freq, audio_hw_params->fmt, 1); //每秒多少字节
     if (audio_hw_params->bytes_per_sec <= 0 || audio_hw_params->frame_size <= 0) {
         av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size failed\n");
         return -1;
@@ -2887,7 +2939,7 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
     is->eof = 0;
     ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
     switch (avctx->codec_type) {
-    case AVMEDIA_TYPE_AUDIO:
+    case AVMEDIA_TYPE_AUDIO://如果是音频
 #if CONFIG_AVFILTER
         {
             AVFilterContext *sink;
@@ -2909,12 +2961,12 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
             channel_layout = av_buffersink_get_channel_layout(sink);
         }
 #else
-        sample_rate    = avctx->sample_rate;
-        nb_channels    = avctx->channels;
-        channel_layout = avctx->channel_layout;
+        sample_rate    = avctx->sample_rate;//采样率
+        nb_channels    = avctx->channels;//通道
+        channel_layout = avctx->channel_layout;//声道布局
 #endif
 
-        /* prepare audio output */
+        /*创建音频播放线程prepare audio output */
         if ((ret = audio_open(ffp, channel_layout, nb_channels, sample_rate, &is->audio_tgt)) < 0)
             goto fail;
         ffp_set_audio_codec_info(ffp, AVCODEC_MODULE_NAME, avcodec_get_name(avctx->codec_id));
@@ -2932,20 +2984,22 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
 
         is->audio_stream = stream_index;
         is->audio_st = ic->streams[stream_index];
-
+		//解码器初始化
         decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread);
         if ((is->ic->iformat->flags & (AVFMT_NOBINSEARCH | AVFMT_NOGENSEARCH | AVFMT_NO_BYTE_SEEK)) && !is->ic->iformat->read_seek) {
             is->auddec.start_pts = is->audio_st->start_time;
             is->auddec.start_pts_tb = is->audio_st->time_base;
         }
+		//创建音频解码线程
         if ((ret = decoder_start(&is->auddec, audio_thread, ffp, "ff_audio_dec")) < 0)
             goto out;
+		 // 停止音频
         SDL_AoutPauseAudio(ffp->aout, 0);
         break;
-    case AVMEDIA_TYPE_VIDEO:
+    case AVMEDIA_TYPE_VIDEO://如果是视频
         is->video_stream = stream_index;
         is->video_st = ic->streams[stream_index];
-
+		//硬解异步，java层可以设置mediacodec-sync option开启
         if (ffp->async_init_decoder) {
             while (!is->initialized_decoder) {
                 SDL_Delay(5);
@@ -2959,13 +3013,16 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
                 ffp->node_vdec = ffpipeline_open_video_decoder(ffp->pipeline, ffp);
                 if (!ffp->node_vdec)
                     goto fail;
-            }
+            }//同步解码
         } else {
+			//解码初始化，初始化start_pts，SDL_Profiler，第一帧解码时间等
             decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread);
+			//打开解码器
             ffp->node_vdec = ffpipeline_open_video_decoder(ffp->pipeline, ffp);
             if (!ffp->node_vdec)
                 goto fail;
         }
+		//创建解码线程ff_video_dec,开始解码
         if ((ret = decoder_start(&is->viddec, video_thread, ffp, "ff_video_dec")) < 0)
             goto out;
 
@@ -3000,7 +3057,7 @@ static int stream_component_open(FFPlayer *ffp, int stream_index)
         }
 
         break;
-    case AVMEDIA_TYPE_SUBTITLE:
+    case AVMEDIA_TYPE_SUBTITLE://如果是字幕
         if (!ffp->subtitle) break;
 
         is->subtitle_stream = stream_index;
@@ -4796,23 +4853,26 @@ void ffp_set_playback_volume(FFPlayer *ffp, float volume)
     ffp->pf_playback_volume_changed = 1;
 }
 
+//获取视频角度
 int ffp_get_video_rotate_degrees(FFPlayer *ffp)
 {
     VideoState *is = ffp->is;
     if (!is)
         return 0;
-
+//获取的角度%360度，不足的还是原来的值
     int theta  = abs((int)((int64_t)round(fabs(get_rotation(is->video_st))) % 360));
     switch (theta) {
+    //如果角度是0 90 180 270度，则不处理，直接跳出来
         case 0:
         case 90:
         case 180:
         case 270:
             break;
+            //如果角度是360度，则置0
         case 360:
             theta = 0;
             break;
-        default:
+        default://或者置0
             ALOGW("Unknown rotate degress: %d\n", theta);
             theta = 0;
             break;
@@ -4820,6 +4880,7 @@ int ffp_get_video_rotate_degrees(FFPlayer *ffp)
 
     return theta;
 }
+
 
 int ffp_set_stream_selected(FFPlayer *ffp, int stream, int selected)
 {

@@ -73,6 +73,7 @@ static int aout_thread_n(JNIEnv *env, SDL_Aout *aout)
 {
     SDL_Aout_Opaque *opaque = aout->opaque;
     SDL_Android_AudioTrack *atrack = opaque->atrack;
+    //这里的callback就是我们下面分析的callback
     SDL_AudioCallback audio_cblk = opaque->spec.callback;
     void *userdata = opaque->spec.userdata;
     uint8_t *buffer = opaque->buffer;
@@ -80,41 +81,47 @@ static int aout_thread_n(JNIEnv *env, SDL_Aout *aout)
 
     assert(atrack);
     assert(buffer);
-
+    //设置线程优先级
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
-
+    //audiotrack  play函数播放pcm音频
     if (!opaque->abort_request && !opaque->pause_on)
         SDL_Android_AudioTrack_play(env, atrack);
-
+   //没有中断请求
     while (!opaque->abort_request) {
         SDL_LockMutex(opaque->wakeup_mutex);
+        //音频播放暂停请求
         if (!opaque->abort_request && opaque->pause_on) {
+            //调用audiotrack的pause函数来暂停音频播放
             SDL_Android_AudioTrack_pause(env, atrack);
             while (!opaque->abort_request && opaque->pause_on) {
                 SDL_CondWaitTimeout(opaque->wakeup_cond, opaque->wakeup_mutex, 1000);
             }
             if (!opaque->abort_request && !opaque->pause_on) {
-                if (opaque->need_flush) {
+                if (opaque->need_flush) {//刷新
                     opaque->need_flush = 0;
                     SDL_Android_AudioTrack_flush(env, atrack);
                 }
+                //播放
                 SDL_Android_AudioTrack_play(env, atrack);
             }
         }
+        //刷新
         if (opaque->need_flush) {
             opaque->need_flush = 0;
             SDL_Android_AudioTrack_flush(env, atrack);
         }
+        //设置音量
         if (opaque->need_set_volume) {
             opaque->need_set_volume = 0;
             SDL_Android_AudioTrack_set_volume(env, atrack, opaque->left_volume, opaque->right_volume);
         }
+        //速度改变
         if (opaque->speed_changed) {
             opaque->speed_changed = 0;
             SDL_Android_AudioTrack_setSpeed(env, atrack, opaque->speed);
         }
         SDL_UnlockMutex(opaque->wakeup_mutex);
-
+        //回调函数
         audio_cblk(userdata, buffer, copy_size);
         if (opaque->need_flush) {
             SDL_Android_AudioTrack_flush(env, atrack);
@@ -125,6 +132,7 @@ static int aout_thread_n(JNIEnv *env, SDL_Aout *aout)
             opaque->need_flush = 0;
             SDL_Android_AudioTrack_flush(env, atrack);
         } else {
+        //从回调函数中取buffer往audiotrack写数据
             int written = SDL_Android_AudioTrack_write(env, atrack, buffer, copy_size);
             if (written != copy_size) {
                 ALOGW("AudioTrack: not all data copied %d/%d", (int)written, (int)copy_size);
@@ -133,10 +141,11 @@ static int aout_thread_n(JNIEnv *env, SDL_Aout *aout)
 
         // TODO: 1 if callback return -1 or 0
     }
-
+    //释放audiotrack
     SDL_Android_AudioTrack_free(env, atrack);
     return 0;
 }
+
 
 static int aout_thread(void *arg)
 {
@@ -158,12 +167,13 @@ static int aout_open_audio_n(JNIEnv *env, SDL_Aout *aout, const SDL_AudioSpec *d
     SDL_Aout_Opaque *opaque = aout->opaque;
 
     opaque->spec = *desired;
+	//创建audiotrack对象
     opaque->atrack = SDL_Android_AudioTrack_new_from_sdl_spec(env, desired);
     if (!opaque->atrack) {
         ALOGE("aout_open_audio_n: failed to new AudioTrcak()");
         return -1;
     }
-
+	//java层的AudioTrack.getMinBufferSize函数
     opaque->buffer_size = SDL_Android_AudioTrack_get_min_buffer_size(opaque->atrack);
     if (opaque->buffer_size <= 0) {
         ALOGE("aout_open_audio_n: failed to getMinBufferSize()");
@@ -184,14 +194,16 @@ static int aout_open_audio_n(JNIEnv *env, SDL_Aout *aout, const SDL_AudioSpec *d
         SDL_Android_AudioTrack_get_target_spec(opaque->atrack, obtained);
         SDLTRACE("audio target format fmt:0x%x, channel:0x%x", (int)obtained->format, (int)obtained->channels);
     }
-
+	//调用getAudioSessionId函数
     opaque->audio_session_id = SDL_Android_AudioTrack_getAudioSessionId(env, opaque->atrack);
     ALOGI("audio_session_id = %d\n", opaque->audio_session_id);
 
     opaque->pause_on = 1;
     opaque->abort_request = 0;
+	//创建aout_thread线程来播放音频
     opaque->audio_tid = SDL_CreateThreadEx(&opaque->_audio_tid, aout_thread, aout, "ff_aout_android");
     if (!opaque->audio_tid) {
+		//音频播放线程创建失败，释放audiotrack
         ALOGE("aout_open_audio_n: failed to create audio thread");
         SDL_Android_AudioTrack_free(env, opaque->atrack);
         opaque->atrack = NULL;
@@ -307,24 +319,22 @@ SDL_Aout *SDL_AoutAndroid_CreateForAudioTrack()
     SDL_Aout *aout = SDL_Aout_CreateInternal(sizeof(SDL_Aout_Opaque));
     if (!aout)
         return NULL;
-
     SDL_Aout_Opaque *opaque = aout->opaque;
     opaque->wakeup_cond  = SDL_CreateCond();
     opaque->wakeup_mutex = SDL_CreateMutex();
-    opaque->speed        = 1.0f;
-
+    opaque->speed        = 1.0f;//速度默认是1.0f
     aout->opaque_class = &g_audiotrack_class;
     aout->free_l       = aout_free_l;
-    aout->open_audio   = aout_open_audio;
+    aout->open_audio   = aout_open_audio;//这里的分析会在下面讲到
     aout->pause_audio  = aout_pause_audio;
     aout->flush_audio  = aout_flush_audio;
     aout->set_volume   = aout_set_volume;
     aout->close_audio  = aout_close_audio;
     aout->func_get_audio_session_id = aout_get_audio_session_id;
-    aout->func_set_playback_rate    = func_set_playback_rate;
-
+    aout->func_set_playback_rate    = func_set_playback_rate;//设置播放速度
     return aout;
 }
+
 
 bool SDL_AoutAndroid_IsObjectOfAudioTrack(SDL_Aout *aout)
 {

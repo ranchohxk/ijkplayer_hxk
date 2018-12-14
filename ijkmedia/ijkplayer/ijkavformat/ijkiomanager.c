@@ -386,11 +386,12 @@ int ijkio_manager_io_open(IjkIOManagerContext *h, const char *url, int flags, Ij
     }
 
     IjkAVDictionaryEntry *t = NULL;
+	//缓存文件地址
     t = ijk_av_dict_get(*options, "cache_file_path", NULL, IJK_AV_DICT_MATCH_CASE);
     if (t) {
         strcpy(h->ijkio_app_ctx->cache_file_path, t->value);
     }
-
+    //缓存文件的信息
     t = ijk_av_dict_get(*options, "cache_map_path", NULL, IJK_AV_DICT_MATCH_CASE);
     if (t) {
         strcpy(h->cache_map_path, t->value);
@@ -405,16 +406,19 @@ int ijkio_manager_io_open(IjkIOManagerContext *h, const char *url, int flags, Ij
             if (t) {
                 parse_cache_map_file = (int)strtol(t->value, NULL, 10);
                 if (parse_cache_map_file) {
+					 //缓存文件信息解析，解析tree_index，tree_physical_init_pos,tree_file_size,entry_logical_pos等信息，后面具体分析
                     ijkio_manager_parse_cache_info(h->ijkio_app_ctx, h->cache_map_path);
                 }
             }
         }
     }
-
+	 //回调
     h->ijkio_app_ctx->ijkio_interrupt_callback = h->ijkio_interrupt_callback;
 
     IjkURLContext *inner = NULL;
+	//会根据url来初始化inner
     ijkio_alloc_url(&inner, url);
+	//这里的inner就是ijkiocache中的ijkio_cache_protocol
     if (inner) {
         inner->ijkio_app_ctx = h->ijkio_app_ctx;
         if (h->ijk_ctx_map) {
@@ -422,6 +426,7 @@ int ijkio_manager_io_open(IjkIOManagerContext *h, const char *url, int flags, Ij
             inner->state = IJKURL_STARTED;
             ijk_map_put(h->ijk_ctx_map, (int64_t)(intptr_t)h->cur_ffmpeg_ctx, inner);
         }
+		//这里调用打开的是ijkiocache中的ijkio_cache_protocol的ijkio_cache_open函数
         ret = inner->prot->url_open2(inner, url, flags, options);
         if (ret != 0)
             goto fail;

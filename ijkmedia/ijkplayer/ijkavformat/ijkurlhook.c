@@ -54,17 +54,16 @@ static int ijkurlhook_call_inject(URLContext *h)
 {
     Context *c = h->priv_data;
     int ret = 0;
-
-    if (ff_check_interrupt(&h->interrupt_callback)) {
+    if (ff_check_interrupt(&h->interrupt_callback)) {//中断检查，手动退出
         ret = AVERROR_EXIT;
         goto fail;
     }
-
+ 
     if (c->app_ctx) {
-        AVAppIOControl control_data_backup = c->app_io_ctrl;
-
+        AVAppIOControl control_data_backup = c->app_io_ctrl;//控制数据备份
+ 
         c->app_io_ctrl.is_handled = 0;
-        c->app_io_ctrl.is_url_changed = 0;
+        c->app_io_ctrl.is_url_changed = 0;//url是否改变置0
         ret = av_application_on_io_control(c->app_ctx, AVAPP_CTRL_WILL_HTTP_OPEN, &c->app_io_ctrl);
         if (ret || !c->app_io_ctrl.url[0]) {
             ret = AVERROR_EXIT;
@@ -72,21 +71,22 @@ static int ijkurlhook_call_inject(URLContext *h)
         }
         if (!c->app_io_ctrl.is_url_changed && strcmp(control_data_backup.url, c->app_io_ctrl.url)) {
             // force a url compare
-            c->app_io_ctrl.is_url_changed = 1;
+            c->app_io_ctrl.is_url_changed = 1;//url改变了
         }
-
+ 
         av_log(h, AV_LOG_INFO, "%s %s (%s)\n", h->prot->name, c->app_io_ctrl.url, c->app_io_ctrl.is_url_changed ? "changed" : "remain");
     }
-
-    if (ff_check_interrupt(&h->interrupt_callback)) {
+ 
+    if (ff_check_interrupt(&h->interrupt_callback)) {//中断检查
         ret = AVERROR_EXIT;
         av_log(h, AV_LOG_ERROR, "%s %s (%s)\n", h->prot->name, c->app_io_ctrl.url, c->app_io_ctrl.is_url_changed ? "changed" : "remain");
         goto fail;
     }
-
+ 
 fail:
     return ret;
 }
+
 
 static int ijkurlhook_reconnect(URLContext *h, AVDictionary *extra)
 {
@@ -94,14 +94,15 @@ static int ijkurlhook_reconnect(URLContext *h, AVDictionary *extra)
     int ret = 0;
     URLContext *new_url = NULL;
     AVDictionary *inner_options = NULL;
-
+ 
     c->test_fail_point_next += c->test_fail_point;
-
+ 
     assert(c->inner_options);
+    //拷贝options
     av_dict_copy(&inner_options, c->inner_options, 0);
     if (extra)
         av_dict_copy(&inner_options, extra, 0);
-
+    //打开协议
     ret = ffurl_open_whitelist(&new_url,
                                c->app_io_ctrl.url,
                                c->inner_flags,
@@ -112,50 +113,53 @@ static int ijkurlhook_reconnect(URLContext *h, AVDictionary *extra)
                                h);
     if (ret)
         goto fail;
-
+ 
     ffurl_closep(&c->inner);
-
-    c->inner        = new_url;
+   
+    c->inner        = new_url;//获取ijkhttphook下一层协议的URLContext，如http的URLContext
     h->is_streamed  = c->inner->is_streamed;
+    //赋值物理地址
     c->logical_pos  = ffurl_seek(c->inner, 0, SEEK_CUR);
+    //可以streamed的话，物理地址设置为-1
     if (c->inner->is_streamed)
         c->logical_size = -1;
     else
         c->logical_size = ffurl_seek(c->inner, 0, AVSEEK_SIZE);
-
+ 
     c->io_error = 0;
 fail:
     av_dict_free(&inner_options);
     return ret;
 }
 
+
 static int ijkurlhook_init(URLContext *h, const char *arg, int flags, AVDictionary **options)
 {
     Context *c = h->priv_data;
     int ret = 0;
-
+         //c->scheme是ijkhttphook:
     av_strstart(arg, c->scheme, &arg);
-
     c->inner_flags = flags;
-
+ 
     if (options)
         av_dict_copy(&c->inner_options, *options, 0);
-
+ //设置ijkapplication和ijkinject-segment-index到options中
     av_dict_set_int(&c->inner_options, "ijkapplication", c->app_ctx_intptr, 0);
     av_dict_set_int(&c->inner_options, "ijkinject-segment-index", c->segment_index, 0);
-
+ 
     c->app_io_ctrl.size = sizeof(c->app_io_ctrl);
     c->app_io_ctrl.segment_index = c->segment_index;
     c->app_io_ctrl.retry_counter = 0;
-
+ 
     if (av_strstart(arg, c->inner_scheme, NULL)) {
         snprintf(c->app_io_ctrl.url, sizeof(c->app_io_ctrl.url), "%s", arg);
     } else {
         snprintf(c->app_io_ctrl.url, sizeof(c->app_io_ctrl.url), "%s%s", c->inner_scheme, arg);
     }
-
+         //c->app_io_ctrl.url 这里就是没有ijkhttphook的url链接，如http://videocdn.eebbk.net/01cc6382b142217dad89516a19a4b299.mp4
     return ret;
 }
+
 
 static int ijktcphook_open(URLContext *h, const char *arg, int flags, AVDictionary **options)
 {
@@ -182,6 +186,7 @@ static int ijkurlhook_close(URLContext *h)
     Context *c = h->priv_data;
 
     av_dict_free(&c->inner_options);
+	//关闭URLContext
     return ffurl_closep(&c->inner);
 }
 
@@ -189,24 +194,26 @@ static int ijkurlhook_read(URLContext *h, unsigned char *buf, int size)
 {
     Context *c = h->priv_data;
     int ret = 0;
-
+ 
     if (c->io_error < 0)
         return c->io_error;
-
+ 
     if (c->test_fail_point_next > 0 && c->logical_pos >= c->test_fail_point_next) {
         av_log(h, AV_LOG_ERROR, "test fail point:%"PRId64"\n", c->test_fail_point_next);
         c->io_error = AVERROR(EIO);
         return AVERROR(EIO);
     }
-
+ 
     ret = ffurl_read(c->inner, buf, size);
+    //读取到数据，物理地址加上读取到的数据
     if (ret > 0)
         c->logical_pos += ret;
     else
         c->io_error = ret;
-
+ 
     return ret;
 }
+
 
 static int ijkurlhook_write(URLContext *h, const unsigned char *buf, int size)
 {
@@ -238,99 +245,108 @@ static int ijkhttphook_reconnect_at(URLContext *h, int64_t offset)
 {
     int           ret        = 0;
     AVDictionary *extra_opts = NULL;
-
+ 
     av_dict_set_int(&extra_opts, "offset", offset, 0);
-    av_dict_set_int(&extra_opts, "dns_cache_clear", 1, 0);
-    ret = ijkurlhook_reconnect(h, extra_opts);
+    av_dict_set_int(&extra_opts, "dns_cache_clear", 1, 0);//清除dns
+    ret = ijkurlhook_reconnect(h, extra_opts);//重连
     av_dict_free(&extra_opts);
     return ret;
 }
+
 
 static int ijkhttphook_open(URLContext *h, const char *arg, int flags, AVDictionary **options)
 {
     Context *c = h->priv_data;
     int ret = 0;
-
+ 
     c->app_ctx = (AVApplicationContext *)(intptr_t)c->app_ctx_intptr;
     c->scheme = "ijkhttphook:";
+    //判断协议是否是ijkhttphook开头
     if (av_stristart(arg, "ijkhttphook:https:", NULL))
         c->inner_scheme = "https:";
     else
         c->inner_scheme = "http:";
-
+    //arg就是url连接：ijkhttphook:http://videocdn.eebbk.net/01cc6382b142217dad89516a19a4b299.mp4
+    //初始化app_io_ctrl的size，retry_counter,url
     ret = ijkurlhook_init(h, arg, flags, options);
     if (ret)
         goto fail;
-
+  //中断检查，发送vent_type:AVAPP_CTRL_WILL_HTTP_OPEN
     ret = ijkurlhook_call_inject(h);
     if (ret)
         goto fail;
-
+ //建立连接
     ret = ijkurlhook_reconnect(h, NULL);
+    //如果连接失败，不断尝试连接
     while (ret) {
         int inject_ret = 0;
-
+ 
         switch (ret) {
             case AVERROR_EXIT:
                 goto fail;
         }
-
+ 
         c->app_io_ctrl.retry_counter++;
         inject_ret = ijkurlhook_call_inject(h);
         if (inject_ret) {
             ret = AVERROR_EXIT;
             goto fail;
         }
-
+ //当我们把java层的OnNativeInvoke返回false时，在ijkplayer_jni.c中的inject_callback函数中is_handled被置为0，也就会中断while循环，不会不断循环尝试重试了。
         if (!c->app_io_ctrl.is_handled)
             goto fail;
-
+ 
         av_log(h, AV_LOG_INFO, "%s: will reconnect at start\n", __func__);
         ret = ijkhttphook_reconnect_at(h, 0);
         av_log(h, AV_LOG_INFO, "%s: did reconnect at start: %d\n", __func__, ret);
     }
-
+ 
 fail:
     return ret;
 }
+
 
 static int ijkhttphook_read(URLContext *h, unsigned char *buf, int size)
 {
     Context *c = h->priv_data;
     int ret = 0;
-
+ 
     c->app_io_ctrl.retry_counter = 0;
-
+ 
     ret = ijkurlhook_read(h, buf, size);
+         //读取失败，不断尝试重新建立连接读取数据
     while (ret < 0 && !h->is_streamed && c->logical_pos < c->logical_size) {
-        switch (ret) {
+        switch (ret) {//如果AVERROR_EXIT直接退出
             case AVERROR_EXIT:
                 goto fail;
         }
-
+        //重新尝试次数++
         c->app_io_ctrl.retry_counter++;
+        //中断检查以及发送event_type：AVAPP_CTRL_WILL_HTTP_OPEN
         ret = ijkurlhook_call_inject(h);
         if (ret)
             goto fail;
-
+        //open的时候发送event_type在ijkplayer_jni.c中已赋值is_handled为1
         if (!c->app_io_ctrl.is_handled)
             goto fail;
-
+ 
         av_log(h, AV_LOG_INFO, "%s: will reconnect(%d) at %"PRId64"\n", __func__, c->app_io_ctrl.retry_counter, c->logical_pos);
+        //重连
         ret = ijkhttphook_reconnect_at(h, c->logical_pos);
         av_log(h, AV_LOG_INFO, "%s: did reconnect(%d) at %"PRId64": %d\n", __func__, c->app_io_ctrl.retry_counter, c->logical_pos, ret);
         if (ret < 0)
             continue;
-
+        //读数据，如果读取成功，跳出while循环，继续开始读数据
         ret = ijkurlhook_read(h, buf, size);
     }
-
+ 
 fail:
     if (ret <= 0) {
         c->io_error = ret;
     }
     return ret;
 }
+
 
 static int64_t ijkhttphook_reseek_at(URLContext *h, int64_t pos, int whence, int force_reconnect)
 {

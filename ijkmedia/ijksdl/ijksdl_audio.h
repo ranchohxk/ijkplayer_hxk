@@ -79,14 +79,28 @@ typedef void (*SDL_AudioCallback) (void *userdata, Uint8 * stream,
 
 typedef struct SDL_AudioSpec
 {
+	/**音频数据的采样率。常用的有48000,44100等。 samples per second */
     int freq;                   /**< DSP frequency -- samples per second */
+	/*
+    format：音频数据的格式。举例几种格式：
+    AUDIO_U16SYS：Unsigned 16-bit samples
+    AUDIO_S16SYS：Signed 16-bit samples
+    AUDIO_S32SYS：32-bit integer samples
+    AUDIO_F32SYS：32-bit floating point samples */
     SDL_AudioFormat format;     /**< Audio data format */
+	/*声道数。例如单声道取值为1，立体声取值为2。*/
     Uint8 channels;             /**< Number of channels: 1 mono, 2 stereo */
+	/*设置静音的值*/
     Uint8 silence;              /**< Audio buffer silence value (calculated) */
+	/*音频缓冲区中的采样个数，要求必须是2的n次方*/
     Uint16 samples;             /**< Audio buffer size in samples (power of 2) */
+	/*考虑到兼容性的一个参数*/
     Uint16 padding;             /**< NOT USED. Necessary for some compile environments */
+	/**音频缓冲区的大小，以字节为单位 */
     Uint32 size;                /**< Audio buffer size in bytes (calculated) */
+	/**填充音频缓冲区的回调函数*/
     SDL_AudioCallback callback;
+	 /*用户自定义的数据*/
     void *userdata;
 } SDL_AudioSpec;
 

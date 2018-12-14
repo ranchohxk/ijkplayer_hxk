@@ -69,9 +69,10 @@ static IJKFF_Pipenode *func_open_video_decoder(IJKFF_Pipeline *pipeline, FFPlaye
 {
     IJKFF_Pipeline_Opaque *opaque = pipeline->opaque;
     IJKFF_Pipenode        *node = NULL;
-
+	 //硬解
     if (ffp->mediacodec_all_videos || ffp->mediacodec_avc || ffp->mediacodec_hevc || ffp->mediacodec_mpeg2)
         node = ffpipenode_create_video_decoder_from_android_mediacodec(ffp, pipeline, opaque->weak_vout);
+	//硬解创建时失败的话，切软解
     if (!node) {
         node = ffpipenode_create_video_decoder_from_ffplay(ffp);
     }
@@ -82,11 +83,12 @@ static IJKFF_Pipenode *func_open_video_decoder(IJKFF_Pipeline *pipeline, FFPlaye
 static SDL_Aout *func_open_audio_output(IJKFF_Pipeline *pipeline, FFPlayer *ffp)
 {
     SDL_Aout *aout = NULL;
-    if (ffp->opensles) {
+    if (ffp->opensles) {//如果开启了opensles，创建aout
         aout = SDL_AoutAndroid_CreateForOpenSLES();
-    } else {
+    } else {//创建audiotrack
         aout = SDL_AoutAndroid_CreateForAudioTrack();
     }
+    //设置音量
     if (aout)
         SDL_AoutSetStereoVolume(aout, pipeline->opaque->left_volume, pipeline->opaque->right_volume);
     return aout;
@@ -217,6 +219,7 @@ int ffpipeline_set_surface(JNIEnv *env, IJKFF_Pipeline* pipeline, jobject surfac
 
     ffpipeline_lock_surface(pipeline);
     {
+    	//上层传递下来的surface和之前的surface一样
         jobject prev_surface = opaque->jsurface;
 
         if ((surface == prev_surface) ||
@@ -229,8 +232,9 @@ int ffpipeline_set_surface(JNIEnv *env, IJKFF_Pipeline* pipeline, jobject surfac
             } else {
                 opaque->jsurface = NULL;
             }
+			//surface改变了，这里置为true，surface需要重新config
             opaque->is_surface_need_reconfigure = true;
-
+			 //之前的surface如果不为空，释放掉
             if (prev_surface != NULL) {
                 SDL_JNI_DeleteGlobalRefP(env, &prev_surface);
             }

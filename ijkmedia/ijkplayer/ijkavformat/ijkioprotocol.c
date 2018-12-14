@@ -33,10 +33,12 @@ int ijkio_alloc_url(IjkURLContext **ph, const char *url) {
     if (!ph) {
         return -1;
     }
-
+	//根据对应的协议名来初始化protcol和priv_data
     IjkURLContext *h = NULL;
+	 //还是cache协议的时候
     if (!strncmp(url, "cache:", strlen("cache:"))) {
         h = (IjkURLContext *)calloc(1, sizeof(IjkURLContext));
+		//指定协议结构体为ijkio_cache_protocol
         h->prot = &ijkio_cache_protocol;
         h->priv_data = calloc(1, ijkio_cache_protocol.priv_data_size);
     } else if (!strncmp(url, "ffio:", strlen("ffio:"))) {
