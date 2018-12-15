@@ -3422,7 +3422,7 @@ static int read_thread(void *arg)
             continue;
         }
 #endif
-        if (is->seek_req) {
+        if (is->seek_req) {//·¢ÆðseekÇëÇó
             int64_t seek_target = is->seek_pos;
             int64_t seek_min    = is->seek_rel > 0 ? seek_target - is->seek_rel + 2: INT64_MIN;
             int64_t seek_max    = is->seek_rel < 0 ? seek_target - is->seek_rel - 2: INT64_MAX;

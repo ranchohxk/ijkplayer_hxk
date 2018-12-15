@@ -35,6 +35,9 @@ extern "C" void ijk_map_clear(void *data);
 extern "C" void ijk_map_destroy(void *data);
 extern "C" void ijk_map_traversal_handle(void *data, void *parm, int (*enu)(void *parm, int64_t key, void *elem));
 
+/**
+*ijk·â×°stlµÄmapº¯Êý
+**/
 void* ijk_map_create() {
     IjkMap *data = new IjkMap();
     return data;
