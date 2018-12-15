@@ -51,6 +51,15 @@
 
 static JavaVM* g_jvm;
 
+
+
+
+static int eebbk_Check(JNIEnv *env, jobject this,int arg1,int arg2,int arg3) {
+	return 1;
+}
+
+ 
+
 typedef struct player_fields_t {
     pthread_mutex_t mutex;
     jclass clazz;
@@ -63,7 +72,6 @@ static bool mediacodec_select_callback(void *opaque, ijkmp_mediacodecinfo_contex
 static IjkMediaPlayer *jni_get_media_player(JNIEnv* env, jobject thiz)
 {
     pthread_mutex_lock(&g_clazz.mutex);
-
     IjkMediaPlayer *mp = (IjkMediaPlayer *) (intptr_t) J4AC_IjkMediaPlayer__mNativeMediaPlayer__get__catchAll(env, thiz);
     if (mp) {
         ijkmp_inc_ref(mp);
@@ -76,7 +84,6 @@ static IjkMediaPlayer *jni_get_media_player(JNIEnv* env, jobject thiz)
 static IjkMediaPlayer *jni_set_media_player(JNIEnv* env, jobject thiz, IjkMediaPlayer *mp)
 {
     pthread_mutex_lock(&g_clazz.mutex);
-
     IjkMediaPlayer *old = (IjkMediaPlayer*) (intptr_t) J4AC_IjkMediaPlayer__mNativeMediaPlayer__get__catchAll(env, thiz);
     if (mp) {
         ijkmp_inc_ref(mp);
@@ -196,6 +203,61 @@ IjkMediaPlayer_setDataSourceFd(JNIEnv *env, jobject thiz, jint fd)
 LABEL_RETURN:
     ijkmp_dec_ref_p(&mp);
 }
+
+//add by 
+static void
+IjkMediaPlayer_setDataSourceFdAndOffset(JNIEnv *env, jobject thiz, jint fd, jint offset, jint lenth)
+{
+    MPTRACE("%s\n", __func__);
+    int retval = 0;
+    int dupFd = 0;
+    char uri[128];
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    JNI_CHECK_GOTO(fd > 0, env, "java/lang/IllegalArgumentException", "mpjni: setDataSourceFd: null fd", LABEL_RETURN);
+    JNI_CHECK_GOTO(mp, env, "java/lang/IllegalStateException", "mpjni: setDataSourceFd: null mp", LABEL_RETURN);
+
+    dupFd = dup(fd);
+
+    ALOGD("setDataSourceFd: dup(%d)=%d, offset:%d, lenth=%d\n", fd, dupFd, offset, lenth);
+    snprintf(uri, sizeof(uri), "pipeof:%d,%d,%d", dupFd, offset, lenth);
+    retval = ijkmp_set_data_source(mp, uri);
+
+    IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+//end add
+
+//add by hxk for setdatasourcecache(path)
+static void
+IjkMediaPlayer_setDataSourceCache(
+    JNIEnv *env, jobject thiz, jstring path)
+{
+    MPTRACE("%s\n", __func__);
+    int retval = 0;
+    const char *c_path = NULL;
+	char uri[400];
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    JNI_CHECK_GOTO(path, env, "java/lang/IllegalArgumentException", "mpjni: setDataSourceCache: null path", LABEL_RETURN);
+    JNI_CHECK_GOTO(mp, env, "java/lang/IllegalStateException", "mpjni: setDataSourceCache: null mp", LABEL_RETURN);
+
+    c_path = (*env)->GetStringUTFChars(env, path, NULL );
+    JNI_CHECK_GOTO(c_path, env, "java/lang/OutOfMemoryError", "mpjni: setDataSourceCache: path.string oom", LABEL_RETURN);
+
+    ALOGV("setDataSourceCache: path %s", c_path);
+	snprintf(uri, sizeof(uri), "ijkio:cache:ffio:%s", c_path);
+    retval = ijkmp_set_data_source(mp, uri);
+    (*env)->ReleaseStringUTFChars(env, path, c_path);
+
+    IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+
+
+//add end
 
 static void
 IjkMediaPlayer_setDataSourceCallback(JNIEnv *env, jobject thiz, jobject callback)
@@ -868,7 +930,7 @@ static bool mediacodec_select_callback(void *opaque, ijkmp_mediacodecinfo_contex
         ALOGE("%s: SetupThreadEnv failed\n", __func__);
         return -1;
     }
-	//调java层ijkMediaPlayer的onSelectCodec来获取codec name
+
     found_codec_name = J4AC_IjkMediaPlayer__onSelectCodec__withCString__asCBuffer(env, weak_this, mcc->mime_type, mcc->profile, mcc->level, mcc->codec_name, sizeof(mcc->codec_name));
     if (J4A_ExceptionCheck__catchAll(env) || !found_codec_name) {
         ALOGE("%s: onSelectCodec failed\n", __func__);
@@ -1139,7 +1201,9 @@ static JNINativeMethod g_methods[] = {
         "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V",
         (void *) IjkMediaPlayer_setDataSourceAndHeaders
     },
+    { "_setDataSourceCache","(Ljava/lang/String;)V",(void *)IjkMediaPlayer_setDataSourceCache},
     { "_setDataSourceFd",       "(I)V",     (void *) IjkMediaPlayer_setDataSourceFd },
+	{ "_setDataSourceFd",       "(III)V",     (void *) IjkMediaPlayer_setDataSourceFdAndOffset },
     { "_setDataSource",         "(Ltv/danmaku/ijk/media/player/misc/IMediaDataSource;)V", (void *)IjkMediaPlayer_setDataSourceCallback },
     { "_setAndroidIOCallback",  "(Ltv/danmaku/ijk/media/player/misc/IAndroidIO;)V", (void *)IjkMediaPlayer_setAndroidIOCallback },
 
