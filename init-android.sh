@@ -17,6 +17,7 @@
 #
 
 # IJK_FFMPEG_UPSTREAM=git://git.videolan.org/ffmpeg.git
+#从bilibili取ffmpeg数据，可改成自己库，方便查阅
 IJK_FFMPEG_UPSTREAM=https://github.com/Bilibili/FFmpeg.git
 IJK_FFMPEG_FORK=https://github.com/Bilibili/FFmpeg.git
 IJK_FFMPEG_COMMIT=ff3.4--ijk0.8.7--20180103--001

@@ -3329,8 +3329,8 @@ static int read_thread(void *arg)
     /* open the streams */
     if (st_index[AVMEDIA_TYPE_AUDIO] >= 0) {
         stream_component_open(ffp, st_index[AVMEDIA_TYPE_AUDIO]);
-    } else {
-        ffp->av_sync_type = AV_SYNC_VIDEO_MASTER;
+    } else {//如果没有音频流
+        ffp->av_sync_type = AV_SYNC_VIDEO_MASTER;//选择视频流作为外部时钟
         is->av_sync_type  = ffp->av_sync_type;
     }
 

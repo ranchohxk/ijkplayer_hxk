@@ -207,6 +207,9 @@ static int cmp(const void *key, const void *node)
     return FFDIFFSIGN(*(const int64_t *)key, ((const IjkCacheEntry *) node)->logical_pos);
 }
 
+/**
+* //缓存文件信息解析，解析tree_index，tree_physical_init_pos,tree_file_size,entry_logical_pos等信息
+**/
 static void ijkio_manager_parse_cache_info(IjkIOApplicationContext *app_ctx, char *file_path) {
     char string_line[CONFIG_MAX_LINE] = {0};
     char **ptr = (char **)&string_line;

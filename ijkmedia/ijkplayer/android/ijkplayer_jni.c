@@ -51,14 +51,9 @@
 
 static JavaVM* g_jvm;
 
-
-
-
 static int eebbk_Check(JNIEnv *env, jobject this,int arg1,int arg2,int arg3) {
 	return 1;
 }
-
- 
 
 typedef struct player_fields_t {
     pthread_mutex_t mutex;
